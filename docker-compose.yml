@@ -1,0 +1,57 @@
+version: '3.8'
+
+services:
+  # AgriSurgeon API Backend
+  agrisurgeon-api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: agrisurgeon-api
+    ports:
+      - "8000:8000"
+    environment:
+      - ENV=production
+      - LOG_LEVEL=INFO
+      - MODELS_DIR=/app/backend/models
+      - MODEL_PATH=/app/backend/models/MobileNetV3_SOTA_Regularized.h5
+      - SCALER_PATH=/app/backend/models/scaler.pkl
+      - SVM_PATH=/app/backend/models/svm_hybrid_model.pkl
+      - CLASS_INDICES_PATH=/app/backend/models/class_indices.json
+    volumes:
+      - ./backend/models:/app/backend/models:ro
+      - ./backend/logs:/app/backend/logs
+      - ./static:/app/static
+    networks:
+      - agrisurgeon-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Nginx reverse proxy and static file server
+  nginx:
+    image: nginx:alpine
+    container_name: agrisurgeon-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./frontend:/usr/share/nginx/html:ro
+      - ./docker/certs:/etc/nginx/certs:ro
+    depends_on:
+      - agrisurgeon-api
+    networks:
+      - agrisurgeon-network
+    restart: unless-stopped
+
+networks:
+  agrisurgeon-network:
+    driver: bridge
+
+volumes:
+  agrisurgeon_data:
+    driver: local
