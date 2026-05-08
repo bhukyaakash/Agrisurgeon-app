@@ -1,7 +1,7 @@
 """
 AgriSurgeon API - AI-Powered Plant Disease Detection
 Hybrid MobileNetV3-SVM-IoT Fusion Framework
-Load and use REAL trained models
+FINAL VERSION - With Environmental Impact on Confidence
 """
 
 import os
@@ -120,6 +120,7 @@ class ModelManager:
             logger.info(f"   • CNN: {Config.MODEL_PATH}")
             logger.info(f"   • SVM: {Config.SVM_PATH}")
             logger.info(f"   • Scaler: {Config.SCALER_PATH}")
+            logger.info(f"   • Advisory DB: {deployment_config_path}")
             logger.info(f"   • Classes: {len(self.disease_names)}")
             
         except FileNotFoundError as e:
@@ -198,13 +199,9 @@ def validate_image(image_data: bytes) -> bool:
             return False
         
         img = Image.open(io.BytesIO(image_data))
-        # Check if valid image
         img.verify()
-        
-        # Reopen after verify
         img = Image.open(io.BytesIO(image_data))
         
-        # Check format
         if img.format.lower() not in Config.ALLOWED_FORMATS:
             logger.warning(f"Unsupported image format: {img.format}")
             return False
@@ -220,10 +217,7 @@ def process_image(image_data: bytes) -> np.ndarray:
         img = Image.open(io.BytesIO(image_data)).convert('RGB')
         img = img.resize((Config.IMG_SIZE, Config.IMG_SIZE))
         
-        # Normalize to 0-1
         img_array = np.array(img) / 255.0
-        
-        # Add batch dimension
         img_array = np.expand_dims(img_array, axis=0)
         
         return img_array.astype(np.float32)
@@ -231,14 +225,61 @@ def process_image(image_data: bytes) -> np.ndarray:
         logger.error(f"Image processing error: {e}")
         raise
 
+def calculate_environmental_confidence_boost(disease_name: str, temperature: float, humidity: float) -> float:
+    """
+    Calculate confidence boost/penalty based on environmental conditions
+    Returns a multiplier (0.7 to 1.3) that affects the confidence score
+    
+    Different diseases have optimal environmental conditions
+    """
+    
+    # Disease-specific optimal environmental ranges
+    disease_conditions = {
+        "Tomato___Late_blight": {"opt_temp": (10, 25), "opt_humidity": (85, 100)},
+        "Potato___Late_blight": {"opt_temp": (10, 25), "opt_humidity": (85, 100)},
+        "Apple___Apple_scab": {"opt_temp": (5, 20), "opt_humidity": (80, 100)},
+        "Apple___Black_rot": {"opt_temp": (20, 27), "opt_humidity": (70, 100)},
+        "Grape___Black_rot": {"opt_temp": (18, 30), "opt_humidity": (70, 95)},
+        "Tomato___Early_blight": {"opt_temp": (20, 28), "opt_humidity": (60, 90)},
+        "Cherry_(including_sour)___Powdery_mildew": {"opt_temp": (15, 25), "opt_humidity": (30, 50)},
+        "Corn_(maize)___Common_rust_": {"opt_temp": (18, 27), "opt_humidity": (70, 100)},
+    }
+    
+    conditions = disease_conditions.get(disease_name)
+    
+    if not conditions:
+        # Default moderate conditions boost
+        if (15 <= temperature <= 30) and (50 <= humidity <= 85):
+            return 1.1
+        else:
+            return 0.9
+    
+    opt_temp_min, opt_temp_max = conditions["opt_temp"]
+    opt_humidity_min, opt_humidity_max = conditions["opt_humidity"]
+    
+    # Check if conditions are in optimal range
+    temp_optimal = opt_temp_min <= temperature <= opt_temp_max
+    humidity_optimal = opt_humidity_min <= humidity <= opt_humidity_max
+    
+    if temp_optimal and humidity_optimal:
+        # Perfect conditions - boost confidence
+        return 1.25
+    elif temp_optimal or humidity_optimal:
+        # One condition is optimal
+        return 1.10
+    elif (opt_temp_min - 5 <= temperature <= opt_temp_max + 5) and (opt_humidity_min - 10 <= humidity <= opt_humidity_max + 10):
+        # Close to optimal
+        return 1.0
+    else:
+        # Far from optimal - reduce confidence
+        return 0.75
+
 def calculate_risk_level(disease_name: str, temperature: float, humidity: float) -> str:
     """Calculate disease risk level based on disease and environmental conditions"""
     
-    # Check if healthy
     if "healthy" in disease_name.lower():
         return "none"
     
-    # Critical diseases
     critical_diseases = [
         "Tomato___Late_blight",
         "Potato___Late_blight",
@@ -251,7 +292,6 @@ def calculate_risk_level(disease_name: str, temperature: float, humidity: float)
     if disease_name in critical_diseases:
         return "critical"
     
-    # Environmental risk assessment
     if (20 <= temperature <= 28) and (60 <= humidity <= 85):
         return "high"
     elif (15 <= temperature <= 30) and (50 <= humidity <= 95):
@@ -295,6 +335,12 @@ async def predict(
 ):
     """
     Predict plant disease from image and environmental data
+    
+    FEATURES:
+    ✓ Loads models from: backend/models/
+    ✓ Advisory from: backend/deployment_config.json
+    ✓ Confidence varies with environmental conditions
+    ✓ Different predictions for different images
     
     Args:
         file: Leaf image (JPEG/PNG)
@@ -353,18 +399,23 @@ async def predict(
         disease_idx = model_manager.svm_model.predict(hybrid_features)[0]
         disease_name = model_manager.disease_names.get(disease_idx, "Unknown Disease")
         
-        # Calculate confidence from SVM decision function
+        # Calculate base confidence from SVM decision function
         decision_scores = model_manager.svm_model.decision_function(hybrid_features)[0]
-        confidence = float((np.max(decision_scores) + 1) / 2)
-        confidence = min(max(confidence, 0.0), 1.0)
+        base_confidence = float((np.max(decision_scores) + 1) / 2)
+        base_confidence = min(max(base_confidence, 0.0), 1.0)
+        
+        # Apply environmental boost/penalty to confidence
+        environmental_boost = calculate_environmental_confidence_boost(disease_name, temperature, humidity)
+        final_confidence = base_confidence * environmental_boost
+        final_confidence = min(max(final_confidence, 0.0), 1.0)
         
         # Get advisory from deployment_config.json
         advisory = model_manager.advisory_db.get(
             disease_name,
             model_manager.advisory_db.get("generic", {
-                "cause": "Unknown pathogen",
-                "cure": "Consult agricultural specialist",
-                "prevention": "Implement standard disease management practices",
+                "cause": "Unknown disease.",
+                "cure": "Consult agricultural expert.",
+                "prevention": "Follow crop hygiene.",
                 "pathogen_type": "Unknown",
                 "severity": "Unknown"
             })
@@ -373,11 +424,16 @@ async def predict(
         # Calculate risk level based on environmental conditions
         risk_level = calculate_risk_level(disease_name, temperature, humidity)
         
-        logger.info(f"✓ Prediction: {disease_name} (confidence: {confidence:.2%}, risk: {risk_level})")
+        logger.info(f"✓ Prediction: {disease_name}")
+        logger.info(f"  └─ Base Confidence: {base_confidence:.2%}")
+        logger.info(f"  └─ Environmental Factor: {environmental_boost:.2f}x")
+        logger.info(f"  └─ Final Confidence: {final_confidence:.2%}")
+        logger.info(f"  └─ Risk Level: {risk_level}")
+        logger.info(f"  └─ Temp: {temperature}°C, Humidity: {humidity}%")
         
         return {
             "disease": disease_name,
-            "confidence": round(confidence, 4),
+            "confidence": round(final_confidence, 4),
             "temperature": float(temperature),
             "humidity": float(humidity),
             "environmental_risk": risk_level,
@@ -468,7 +524,7 @@ async def http_exception_handler(request, exc):
     }
 
 # ============================================
-# STARTUP MESSAGE
+# STARTUP
 # ============================================
 if __name__ == "__main__":
     import uvicorn
