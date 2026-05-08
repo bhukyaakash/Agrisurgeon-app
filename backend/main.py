@@ -1,6 +1,7 @@
 """
 AgriSurgeon API - AI-Powered Plant Disease Detection
 Hybrid MobileNetV3-SVM-IoT Fusion Framework
+Load and use REAL trained models
 """
 
 import os
@@ -15,8 +16,6 @@ from contextlib import asynccontextmanager
 # TensorFlow & ML
 import tensorflow as tf
 from tensorflow import keras
-from sklearn.preprocessing import StandardScaler
-from sklearn.svm import SVC
 
 # FastAPI & Web
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
@@ -51,14 +50,17 @@ class ModelManager:
         return cls._instance
     
     def load_models(self):
-        """Load all ML models and advisory database"""
+        """Load all real trained ML models and advisory database"""
         try:
-            logger.info("Loading ML models...")
+            logger.info("🔄 Loading real trained models...")
             
             # Load CNN model
-            logger.info(f"Loading CNN from: {Config.MODEL_PATH}")
+            logger.info(f"📥 Loading CNN from: {Config.MODEL_PATH}")
+            if not os.path.exists(Config.MODEL_PATH):
+                raise FileNotFoundError(f"Model not found: {Config.MODEL_PATH}")
+            
             self.cnn_model = keras.models.load_model(Config.MODEL_PATH)
-            logger.info("✓ CNN model loaded")
+            logger.info("✓ CNN model loaded successfully")
             
             # Create feature extractor (output from penultimate layer)
             self.feature_extractor = keras.Model(
@@ -68,19 +70,28 @@ class ModelManager:
             logger.info("✓ Feature extractor created")
             
             # Load scaler
-            logger.info(f"Loading scaler from: {Config.SCALER_PATH}")
+            logger.info(f"📥 Loading scaler from: {Config.SCALER_PATH}")
+            if not os.path.exists(Config.SCALER_PATH):
+                raise FileNotFoundError(f"Scaler not found: {Config.SCALER_PATH}")
+            
             with open(Config.SCALER_PATH, 'rb') as f:
                 self.scaler = pickle.load(f)
-            logger.info("✓ StandardScaler loaded")
+            logger.info("✓ StandardScaler loaded successfully")
             
             # Load SVM model
-            logger.info(f"Loading SVM from: {Config.SVM_PATH}")
+            logger.info(f"📥 Loading SVM from: {Config.SVM_PATH}")
+            if not os.path.exists(Config.SVM_PATH):
+                raise FileNotFoundError(f"SVM model not found: {Config.SVM_PATH}")
+            
             with open(Config.SVM_PATH, 'rb') as f:
                 self.svm_model = pickle.load(f)
-            logger.info("✓ SVM model loaded")
+            logger.info("✓ SVM model loaded successfully")
             
             # Load class indices
-            logger.info(f"Loading class indices from: {Config.CLASS_INDICES_PATH}")
+            logger.info(f"📥 Loading class indices from: {Config.CLASS_INDICES_PATH}")
+            if not os.path.exists(Config.CLASS_INDICES_PATH):
+                raise FileNotFoundError(f"Class indices not found: {Config.CLASS_INDICES_PATH}")
+            
             with open(Config.CLASS_INDICES_PATH, 'r') as f:
                 class_indices = json.load(f)
             
@@ -89,7 +100,7 @@ class ModelManager:
             logger.info(f"✓ Class indices loaded ({len(self.disease_names)} classes)")
             
             # Load advisory database from deployment config
-            logger.info("Loading advisory database...")
+            logger.info("📥 Loading advisory database from deployment_config.json...")
             deployment_config_path = os.path.join(
                 os.path.dirname(__file__),
                 "deployment_config.json"
@@ -101,14 +112,23 @@ class ModelManager:
                     self.advisory_db = config_data.get('advisory', {})
                     logger.info(f"✓ Advisory database loaded ({len(self.advisory_db)} entries)")
             else:
-                logger.warning(f"Advisory database not found at {deployment_config_path}")
+                logger.warning(f"⚠️  Advisory database not found at {deployment_config_path}")
                 self.advisory_db = {}
             
             self.is_loaded = True
-            logger.info("✅ All models loaded successfully!")
+            logger.info("✅ ALL REAL MODELS LOADED SUCCESSFULLY!")
+            logger.info(f"   • CNN: {Config.MODEL_PATH}")
+            logger.info(f"   • SVM: {Config.SVM_PATH}")
+            logger.info(f"   • Scaler: {Config.SCALER_PATH}")
+            logger.info(f"   • Classes: {len(self.disease_names)}")
             
         except FileNotFoundError as e:
-            logger.error(f"❌ Error loading models: Model not found: {e}")
+            logger.error(f"❌ Model file not found: {e}")
+            logger.error("⚠️  Please ensure all model files exist in the models/ directory:")
+            logger.error(f"    • {Config.MODEL_PATH}")
+            logger.error(f"    • {Config.SVM_PATH}")
+            logger.error(f"    • {Config.SCALER_PATH}")
+            logger.error(f"    • {Config.CLASS_INDICES_PATH}")
             raise
         except Exception as e:
             logger.error(f"❌ Error loading models: {e}")
@@ -129,11 +149,11 @@ async def lifespan(app: FastAPI):
         model_manager.load_models()
         yield
     except Exception as e:
-        logger.error(f"Failed to load models during startup: {e}")
+        logger.error(f"❌ Failed to load models during startup: {e}")
         raise
     # Shutdown
     finally:
-        logger.info("Shutting down AgriSurgeon API")
+        logger.info("⏹️  Shutting down AgriSurgeon API")
 
 # ============================================
 # FASTAPI APP INITIALIZATION
@@ -174,6 +194,7 @@ def validate_image(image_data: bytes) -> bool:
     """Validate image file"""
     try:
         if len(image_data) > Config.MAX_FILE_SIZE:
+            logger.warning(f"Image too large: {len(image_data)} bytes")
             return False
         
         img = Image.open(io.BytesIO(image_data))
@@ -185,6 +206,7 @@ def validate_image(image_data: bytes) -> bool:
         
         # Check format
         if img.format.lower() not in Config.ALLOWED_FORMATS:
+            logger.warning(f"Unsupported image format: {img.format}")
             return False
         
         return True
@@ -211,7 +233,12 @@ def process_image(image_data: bytes) -> np.ndarray:
 
 def calculate_risk_level(disease_name: str, temperature: float, humidity: float) -> str:
     """Calculate disease risk level based on disease and environmental conditions"""
-    # Define critical diseases
+    
+    # Check if healthy
+    if "healthy" in disease_name.lower():
+        return "none"
+    
+    # Critical diseases
     critical_diseases = [
         "Tomato___Late_blight",
         "Potato___Late_blight",
@@ -223,10 +250,6 @@ def calculate_risk_level(disease_name: str, temperature: float, humidity: float)
     
     if disease_name in critical_diseases:
         return "critical"
-    
-    # Check for optimal disease conditions
-    if "healthy" in disease_name.lower():
-        return "none"
     
     # Environmental risk assessment
     if (20 <= temperature <= 28) and (60 <= humidity <= 85):
@@ -286,7 +309,7 @@ async def predict(
         if not model_manager.is_loaded:
             raise HTTPException(
                 status_code=503,
-                detail="Models not loaded. Service unavailable."
+                detail="❌ Models not loaded. Service unavailable."
             )
         
         # Read and validate image
@@ -300,7 +323,7 @@ async def predict(
         # Process image
         image_array = process_image(image_data)
         
-        # Extract visual features
+        # Extract visual features from CNN
         visual_features = model_manager.feature_extractor.predict(
             image_array, 
             verbose=0
@@ -318,24 +341,24 @@ async def predict(
                 detail="Humidity must be between 0-100%"
             )
         
-        # Normalize environmental data
+        # Normalize environmental data with scaler
         env_data = np.array([[temperature, humidity]])
         env_normalized = model_manager.scaler.transform(env_data)[0]
         
-        # Create hybrid features
+        # Create hybrid features (CNN features + Environmental features)
         hybrid_features = np.concatenate([visual_features, env_normalized])
         hybrid_features = hybrid_features.reshape(1, -1)
         
-        # Predict disease
+        # Predict disease using SVM
         disease_idx = model_manager.svm_model.predict(hybrid_features)[0]
         disease_name = model_manager.disease_names.get(disease_idx, "Unknown Disease")
         
-        # Calculate confidence
+        # Calculate confidence from SVM decision function
         decision_scores = model_manager.svm_model.decision_function(hybrid_features)[0]
         confidence = float((np.max(decision_scores) + 1) / 2)
         confidence = min(max(confidence, 0.0), 1.0)
         
-        # Get advisory from database (exact match or generic fallback)
+        # Get advisory from deployment_config.json
         advisory = model_manager.advisory_db.get(
             disease_name,
             model_manager.advisory_db.get("generic", {
@@ -347,10 +370,10 @@ async def predict(
             })
         )
         
-        # Calculate risk level
+        # Calculate risk level based on environmental conditions
         risk_level = calculate_risk_level(disease_name, temperature, humidity)
         
-        logger.info(f"✓ Prediction: {disease_name} (confidence: {confidence:.2%})")
+        logger.info(f"✓ Prediction: {disease_name} (confidence: {confidence:.2%}, risk: {risk_level})")
         
         return {
             "disease": disease_name,
@@ -360,7 +383,7 @@ async def predict(
             "environmental_risk": risk_level,
             "advisory": advisory,
             "timestamp": datetime.utcnow().isoformat(),
-            "model_version": "1.0.0"
+            "model_version": Config.API_VERSION
         }
     
     except HTTPException as e:
@@ -400,8 +423,8 @@ async def get_models():
             "purpose": "Visual feature extraction"
         },
         "svm": {
-            "name": "Linear SVM",
-            "kernel": "linear",
+            "name": "Linear/RBF SVM",
+            "kernel": "Auto-detected from trained model",
             "classes": Config.DISEASE_CATEGORIES,
             "input_features": Config.HYBRID_FEATURES_DIM
         },
