@@ -1,259 +1,253 @@
 """
-AgriSurgeon - Main FastAPI Application
-AI-Powered Plant Disease Detection System
+AgriSurgeon API - AI-Powered Plant Disease Detection
+Hybrid MobileNetV3-SVM-IoT Fusion Framework
 """
 
 import os
 import json
+import pickle
 import logging
-from contextlib import asynccontextmanager
-from typing import Optional
-from datetime import datetime
-
 import numpy as np
+from datetime import datetime
+from pathlib import Path
+from contextlib import asynccontextmanager
+
+# TensorFlow & ML
 import tensorflow as tf
+from tensorflow import keras
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
+
+# FastAPI & Web
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
-import pickle
+from pydantic import BaseModel
 from PIL import Image
 import io
 
+# Configuration
 from config import Config
 
 # ============================================
-# LOGGING CONFIGURATION
+# LOGGING SETUP
 # ============================================
 logging.basicConfig(
-    level=logging.INFO,
+    level=Config.LOG_LEVEL,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
 # ============================================
-# MODEL LOADING
+# GLOBAL MODEL MANAGER
 # ============================================
 class ModelManager:
-    """Manages ML model lifecycle"""
+    """Singleton for loading and managing ML models"""
     _instance = None
     
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super(ModelManager, cls).__new__(cls)
+            cls._instance.is_loaded = False
         return cls._instance
     
-    def __init__(self):
-        self.model = None
-        self.feature_extractor = None
-        self.scaler = None
-        self.svm_model = None
-        self.class_indices = None
-        self.disease_names = None
-        self.advisory_db = None
-        self.is_loaded = False
-    
     def load_models(self):
-        """Load all required models"""
+        """Load all ML models and advisory database"""
         try:
             logger.info("Loading ML models...")
             
             # Load CNN model
-            if not os.path.exists(Config.MODEL_PATH):
-                raise FileNotFoundError(f"Model not found: {Config.MODEL_PATH}")
-            
-            self.model = tf.keras.models.load_model(Config.MODEL_PATH)
+            logger.info(f"Loading CNN from: {Config.MODEL_PATH}")
+            self.cnn_model = keras.models.load_model(Config.MODEL_PATH)
             logger.info("✓ CNN model loaded")
             
-            # Create feature extractor (remove softmax head)
-            self.feature_extractor = tf.keras.Model(
-                inputs=self.model.input,
-                outputs=self.model.layers[-2].output
+            # Create feature extractor (output from penultimate layer)
+            self.feature_extractor = keras.Model(
+                inputs=self.cnn_model.input,
+                outputs=self.cnn_model.layers[-2].output
             )
             logger.info("✓ Feature extractor created")
             
             # Load scaler
+            logger.info(f"Loading scaler from: {Config.SCALER_PATH}")
             with open(Config.SCALER_PATH, 'rb') as f:
                 self.scaler = pickle.load(f)
             logger.info("✓ StandardScaler loaded")
             
             # Load SVM model
+            logger.info(f"Loading SVM from: {Config.SVM_PATH}")
             with open(Config.SVM_PATH, 'rb') as f:
                 self.svm_model = pickle.load(f)
             logger.info("✓ SVM model loaded")
             
             # Load class indices
+            logger.info(f"Loading class indices from: {Config.CLASS_INDICES_PATH}")
             with open(Config.CLASS_INDICES_PATH, 'r') as f:
-                self.class_indices = json.load(f)
-            self.disease_names = {v: k for k, v in self.class_indices.items()}
-            logger.info("✓ Class indices loaded")
+                class_indices = json.load(f)
             
-            # Load advisory database
-            self.advisory_db = self._create_advisory_db()
-            logger.info("✓ Advisory database created")
+            # Create reverse mapping (index -> disease name)
+            self.disease_names = {v: k for k, v in class_indices.items()}
+            logger.info(f"✓ Class indices loaded ({len(self.disease_names)} classes)")
+            
+            # Load advisory database from deployment config
+            logger.info("Loading advisory database...")
+            deployment_config_path = os.path.join(
+                os.path.dirname(__file__),
+                "deployment_config.json"
+            )
+            
+            if os.path.exists(deployment_config_path):
+                with open(deployment_config_path, 'r') as f:
+                    config_data = json.load(f)
+                    self.advisory_db = config_data.get('advisory', {})
+                    logger.info(f"✓ Advisory database loaded ({len(self.advisory_db)} entries)")
+            else:
+                logger.warning(f"Advisory database not found at {deployment_config_path}")
+                self.advisory_db = {}
             
             self.is_loaded = True
             logger.info("✅ All models loaded successfully!")
             
-        except Exception as e:
-            logger.error(f"❌ Error loading models: {str(e)}")
+        except FileNotFoundError as e:
+            logger.error(f"❌ Error loading models: Model not found: {e}")
             raise
-    
-    def _create_advisory_db(self):
-        """Create advisory database for all diseases"""
-        return {
-            "Apple Scab": {
-                "cause": "Venturia inaequalis (fungal pathogen)",
-                "cure": "Captan, Mancozeb fungicide applications every 7-14 days during growing season",
-                "prevention": "Remove fallen leaves, improve air circulation, prune for better canopy airflow",
-                "pathogen_type": "Fungal",
-                "severity": "High"
-            },
-            "Apple Rust": {
-                "cause": "Gymnosporangium species (fungal pathogen)",
-                "cure": "Myclobutanil or Triadimefon fungicides applied at bud break",
-                "prevention": "Remove alternate host plants (junipers), improve drainage",
-                "pathogen_type": "Fungal",
-                "severity": "Medium"
-            },
-            "Tomato Late Blight": {
-                "cause": "Phytophthora infestans (oomycete pathogen)",
-                "cure": "Metalaxyl, Dimethomorph systemic fungicides - apply every 5-7 days",
-                "prevention": "Avoid overhead irrigation, ensure 90% humidity threshold not exceeded, remove infected leaves",
-                "pathogen_type": "Fungal",
-                "severity": "Critical"
-            },
-            "Tomato Early Blight": {
-                "cause": "Alternaria solani (fungal pathogen)",
-                "cure": "Chlorothalonil, Mancozeb fungicides applied preventatively",
-                "prevention": "Remove lower leaves, improve air circulation, mulch soil to prevent splash",
-                "pathogen_type": "Fungal",
-                "severity": "High"
-            },
-            "Tomato Mosaic Virus": {
-                "cause": "Tomato Mosaic Virus (viral pathogen)",
-                "cure": "No chemical cure available - remove and destroy infected plants",
-                "prevention": "Use certified virus-free seed, sanitise tools between plants, control insect vectors",
-                "pathogen_type": "Viral",
-                "severity": "High"
-            },
-            "Potato Late Blight": {
-                "cause": "Phytophthora infestans (oomycete pathogen)",
-                "cure": "Metalaxyl-based fungicides, apply every 5-7 days starting at disease onset",
-                "prevention": "Adequate plant spacing, avoid overhead irrigation, remove infected tubers",
-                "pathogen_type": "Fungal",
-                "severity": "Critical"
-            },
-            "Potato Early Blight": {
-                "cause": "Alternaria solani (fungal pathogen)",
-                "cure": "Mancozeb, Chlorothalonil fungicides applied every 7-10 days",
-                "prevention": "Destroy cull piles, control weeds, improve air circulation",
-                "pathogen_type": "Fungal",
-                "severity": "High"
-            },
-            "Cherry Powdery Mildew": {
-                "cause": "Podosphaera clandestina (fungal pathogen)",
-                "cure": "Sulfur or sterol-inhibitor fungicides applied weekly",
-                "prevention": "Ensure adequate humidity is NOT present, improve sunlight penetration",
-                "pathogen_type": "Fungal",
-                "severity": "Medium"
-            },
-            "Grape Black Rot": {
-                "cause": "Guignardia bidwellii (fungal pathogen)",
-                "cure": "Mancozeb or Azoxystrobin applied every 10-14 days",
-                "prevention": "Prune for airflow, remove mummified fruit clusters, destroy diseased canes",
-                "pathogen_type": "Fungal",
-                "severity": "High"
-            },
-            "Corn Leaf Blight": {
-                "cause": "Helminthosporium species (fungal pathogen)",
-                "cure": "Azoxystrobin or Propiconazole fungicides applied at heading",
-                "prevention": "Use resistant varieties, crop rotation, destroy crop residue",
-                "pathogen_type": "Fungal",
-                "severity": "Medium"
-            },
-        }
+        except Exception as e:
+            logger.error(f"❌ Error loading models: {e}")
+            raise
 
+# ============================================
+# INITIALIZE MODEL MANAGER
+# ============================================
 model_manager = ModelManager()
 
 # ============================================
-# LIFESPAN CONTEXT MANAGER
+# FASTAPI LIFESPAN CONTEXT
 # ============================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Manage app startup and shutdown"""
     # Startup
-    logger.info("🚀 AgriSurgeon API starting...")
-    model_manager.load_models()
-    yield
+    try:
+        model_manager.load_models()
+        yield
+    except Exception as e:
+        logger.error(f"Failed to load models during startup: {e}")
+        raise
     # Shutdown
-    logger.info("⏹️ AgriSurgeon API shutting down...")
+    finally:
+        logger.info("Shutting down AgriSurgeon API")
 
 # ============================================
 # FASTAPI APP INITIALIZATION
 # ============================================
 app = FastAPI(
     title=Config.API_TITLE,
-    description="AI-Powered Plant Disease Detection with IoT Integration",
+    description=Config.API_DESCRIPTION,
     version=Config.API_VERSION,
     lifespan=lifespan
 )
 
-# ============================================
-# CORS MIDDLEWARE
-# ============================================
+# Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=Config.CORS_ORIGINS,
+    allow_credentials=Config.CORS_CREDENTIALS,
+    allow_methods=Config.CORS_METHODS,
+    allow_headers=Config.CORS_HEADERS,
 )
 
 # ============================================
-# STATIC FILES
+# REQUEST/RESPONSE MODELS
 # ============================================
-try:
-    app.mount("/static", StaticFiles(directory="static"), name="static")
-except:
-    logger.warning("Static files directory not found")
+class PredictionResponse(BaseModel):
+    disease: str
+    confidence: float
+    temperature: float
+    humidity: float
+    environmental_risk: str
+    advisory: dict
+    timestamp: str
+    model_version: str
 
 # ============================================
 # UTILITY FUNCTIONS
 # ============================================
-def process_image(file_content: bytes) -> np.ndarray:
-    """Process uploaded image"""
-    try:
-        image = Image.open(io.BytesIO(file_content)).convert('RGB')
-        image = image.resize((Config.IMG_SIZE, Config.IMG_SIZE))
-        image_array = np.array(image) / 255.0
-        return np.expand_dims(image_array, axis=0)
-    except Exception as e:
-        raise ValueError(f"Image processing failed: {str(e)}")
-
-def validate_image(file_content: bytes) -> bool:
+def validate_image(image_data: bytes) -> bool:
     """Validate image file"""
     try:
-        if len(file_content) > Config.MAX_FILE_SIZE:
+        if len(image_data) > Config.MAX_FILE_SIZE:
             return False
-        Image.open(io.BytesIO(file_content))
+        
+        img = Image.open(io.BytesIO(image_data))
+        # Check if valid image
+        img.verify()
+        
+        # Reopen after verify
+        img = Image.open(io.BytesIO(image_data))
+        
+        # Check format
+        if img.format.lower() not in Config.ALLOWED_FORMATS:
+            return False
+        
         return True
-    except:
+    except Exception as e:
+        logger.error(f"Image validation error: {e}")
         return False
 
-# ============================================
-# API ENDPOINTS
-# ============================================
+def process_image(image_data: bytes) -> np.ndarray:
+    """Process image for model input"""
+    try:
+        img = Image.open(io.BytesIO(image_data)).convert('RGB')
+        img = img.resize((Config.IMG_SIZE, Config.IMG_SIZE))
+        
+        # Normalize to 0-1
+        img_array = np.array(img) / 255.0
+        
+        # Add batch dimension
+        img_array = np.expand_dims(img_array, axis=0)
+        
+        return img_array.astype(np.float32)
+    except Exception as e:
+        logger.error(f"Image processing error: {e}")
+        raise
 
+def calculate_risk_level(disease_name: str, temperature: float, humidity: float) -> str:
+    """Calculate disease risk level based on disease and environmental conditions"""
+    # Define critical diseases
+    critical_diseases = [
+        "Tomato___Late_blight",
+        "Potato___Late_blight",
+        "Grape___Black_rot",
+        "Grape___Esca_(Black_Measles)",
+        "Orange___Haunglongbing_(Citrus_greening)",
+        "Tomato___Tomato_Yellow_Leaf_Curl_Virus"
+    ]
+    
+    if disease_name in critical_diseases:
+        return "critical"
+    
+    # Check for optimal disease conditions
+    if "healthy" in disease_name.lower():
+        return "none"
+    
+    # Environmental risk assessment
+    if (20 <= temperature <= 28) and (60 <= humidity <= 85):
+        return "high"
+    elif (15 <= temperature <= 30) and (50 <= humidity <= 95):
+        return "medium"
+    else:
+        return "low"
+
+# ============================================
+# ROOT ENDPOINTS
+# ============================================
 @app.get("/")
 async def root():
-    """Root endpoint"""
+    """Root endpoint - API info"""
     return {
-        "message": "🌱 AgriSurgeon API",
+        "name": Config.API_TITLE,
         "version": Config.API_VERSION,
-        "status": "running",
-        "docs": "/docs",
-        "health": "/api/health"
+        "status": "✅ Running",
+        "models_loaded": model_manager.is_loaded,
+        "description": Config.API_DESCRIPTION
     }
 
 @app.get("/api/health")
@@ -261,12 +255,16 @@ async def health_check():
     """Health check endpoint"""
     return {
         "status": "healthy",
-        "version": Config.API_VERSION,
         "timestamp": datetime.utcnow().isoformat(),
-        "models_loaded": model_manager.is_loaded
+        "models_loaded": model_manager.is_loaded,
+        "model_accuracy": Config.MODEL_ACCURACY,
+        "disease_categories": Config.DISEASE_CATEGORIES
     }
 
-@app.post("/api/predict")
+# ============================================
+# PREDICTION ENDPOINT
+# ============================================
+@app.post("/api/predict", response_model=PredictionResponse)
 async def predict(
     file: UploadFile = File(...),
     temperature: float = Form(...),
@@ -337,22 +335,22 @@ async def predict(
         confidence = float((np.max(decision_scores) + 1) / 2)
         confidence = min(max(confidence, 0.0), 1.0)
         
-        # Get advisory
+        # Get advisory from database (exact match or generic fallback)
         advisory = model_manager.advisory_db.get(
             disease_name,
-            {
+            model_manager.advisory_db.get("generic", {
                 "cause": "Unknown pathogen",
                 "cure": "Consult agricultural specialist",
                 "prevention": "Implement standard disease management practices",
                 "pathogen_type": "Unknown",
                 "severity": "Unknown"
-            }
+            })
         )
         
         # Calculate risk level
         risk_level = calculate_risk_level(disease_name, temperature, humidity)
         
-        logger.info(f"Prediction: {disease_name} (confidence: {confidence:.2%})")
+        logger.info(f"✓ Prediction: {disease_name} (confidence: {confidence:.2%})")
         
         return {
             "disease": disease_name,
@@ -369,97 +367,69 @@ async def predict(
         logger.error(f"HTTP Error: {e.detail}")
         raise
     except Exception as e:
-        logger.error(f"Prediction error: {str(e)}")
+        logger.error(f"❌ Prediction error: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
             detail=f"Prediction failed: {str(e)}"
         )
 
-@app.post("/api/batch-predict")
-async def batch_predict(
-    files: list[UploadFile] = File(...),
-    temperature: float = Form(...),
-    humidity: float = Form(...)
-):
-    """Batch predict multiple images"""
-    try:
-        results = []
-        for file in files:
-            image_data = await file.read()
-            if validate_image(image_data):
-                image_array = process_image(image_data)
-                visual_features = model_manager.feature_extractor.predict(
-                    image_array,
-                    verbose=0
-                )[0]
-                
-                env_data = np.array([[temperature, humidity]])
-                env_normalized = model_manager.scaler.transform(env_data)[0]
-                
-                hybrid_features = np.concatenate([visual_features, env_normalized])
-                hybrid_features = hybrid_features.reshape(1, -1)
-                
-                disease_idx = model_manager.svm_model.predict(hybrid_features)[0]
-                disease_name = model_manager.disease_names.get(disease_idx, "Unknown")
-                
-                decision_scores = model_manager.svm_model.decision_function(hybrid_features)[0]
-                confidence = float((np.max(decision_scores) + 1) / 2)
-                confidence = min(max(confidence, 0.0), 1.0)
-                
-                results.append({
-                    "filename": file.filename,
-                    "disease": disease_name,
-                    "confidence": round(confidence, 4)
-                })
-        
-        return {
-            "total": len(files),
-            "processed": len(results),
-            "results": results
-        }
-    
-    except Exception as e:
-        logger.error(f"Batch prediction error: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
+# ============================================
+# INFORMATION ENDPOINTS
+# ============================================
 @app.get("/api/diseases")
 async def get_diseases():
-    """Get list of all detectable diseases"""
+    """Get list of all diseases"""
+    if not model_manager.is_loaded:
+        raise HTTPException(status_code=503, detail="Models not loaded")
+    
+    diseases = list(model_manager.disease_names.values())
     return {
-        "total": len(model_manager.disease_names),
-        "diseases": list(model_manager.disease_names.values()),
-        "advisory_available": len(model_manager.advisory_db)
+        "count": len(diseases),
+        "diseases": sorted(diseases)
     }
 
 @app.get("/api/models")
 async def get_models():
     """Get model information"""
     return {
-        "models": [
-            {
-                "name": "MobileNetV3-Large",
-                "parameters": 5400000,
-                "inference_time_ms": 85
-            },
-            {
-                "name": "Linear SVM",
-                "classifiers": 38,
-                "kernel": "linear"
-            }
-        ],
-        "hybrid_features": 1282,
-        "accuracy": 0.9850,
-        "training_data": 87885
+        "cnn": {
+            "name": "MobileNetV3",
+            "architecture": "MobileNetV3-Small",
+            "parameters": "5.4M",
+            "input_size": (224, 224, 3),
+            "purpose": "Visual feature extraction"
+        },
+        "svm": {
+            "name": "Linear SVM",
+            "kernel": "linear",
+            "classes": Config.DISEASE_CATEGORIES,
+            "input_features": Config.HYBRID_FEATURES_DIM
+        },
+        "performance": {
+            "accuracy": Config.MODEL_ACCURACY,
+            "precision": Config.MODEL_PRECISION,
+            "recall": Config.MODEL_RECALL,
+            "f1_score": Config.MODEL_F1_SCORE
+        },
+        "training": {
+            "samples": Config.TRAINING_SAMPLES,
+            "plant_species": Config.PLANT_SPECIES,
+            "disease_categories": Config.DISEASE_CATEGORIES
+        }
     }
 
 @app.get("/api/statistics")
 async def get_statistics():
     """Get API statistics"""
     return {
-        "version": Config.API_VERSION,
-        "models_loaded": model_manager.is_loaded,
-        "diseases_supported": len(model_manager.disease_names),
-        "advisory_entries": len(model_manager.advisory_db),
+        "api_version": Config.API_VERSION,
+        "model_accuracy": f"{Config.MODEL_ACCURACY * 100:.2f}%",
+        "supported_diseases": Config.DISEASE_CATEGORIES,
+        "plant_species": Config.PLANT_SPECIES,
+        "training_samples": Config.TRAINING_SAMPLES,
+        "inference_timeout": f"{Config.INFERENCE_TIMEOUT}s",
+        "max_image_size": f"{Config.MAX_FILE_SIZE / (1024*1024):.0f}MB",
+        "supported_formats": list(Config.ALLOWED_FORMATS),
         "timestamp": datetime.utcnow().isoformat()
     }
 
@@ -468,59 +438,20 @@ async def get_statistics():
 # ============================================
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request, exc):
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={
-            "error": exc.detail,
-            "status_code": exc.status_code,
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    )
-
-@app.exception_handler(Exception)
-async def general_exception_handler(request, exc):
-    logger.error(f"Unhandled exception: {str(exc)}")
-    return JSONResponse(
-        status_code=500,
-        content={
-            "error": "Internal server error",
-            "status_code": 500,
-            "timestamp": datetime.utcnow().isoformat()
-        }
-    )
-
-# ============================================
-# UTILITY FUNCTIONS
-# ============================================
-def calculate_risk_level(disease_name: str, temperature: float, humidity: float) -> str:
-    """Calculate disease risk based on environmental factors"""
-    
-    risk_factors = {
-        "Tomato Late Blight": {"min_temp": 10, "max_temp": 25, "min_humidity": 85},
-        "Potato Late Blight": {"min_temp": 10, "max_temp": 25, "min_humidity": 85},
-        "Apple Scab": {"min_temp": 5, "max_temp": 20, "min_humidity": 80},
-        "Tomato Mosaic Virus": {"min_temp": 15, "max_temp": 30, "min_humidity": 40},
-        "Cherry Powdery Mildew": {"min_temp": 15, "max_temp": 25, "min_humidity": 30},
+    return {
+        "error": exc.detail,
+        "status_code": exc.status_code,
+        "timestamp": datetime.utcnow().isoformat()
     }
-    
-    factor = risk_factors.get(disease_name)
-    if not factor:
-        return "unknown"
-    
-    temp_ok = factor["min_temp"] <= temperature <= factor["max_temp"]
-    humidity_ok = humidity >= factor["min_humidity"]
-    
-    if temp_ok and humidity_ok:
-        return "high"
-    elif temp_ok or humidity_ok:
-        return "medium"
-    else:
-        return "low"
 
+# ============================================
+# STARTUP MESSAGE
+# ============================================
 if __name__ == "__main__":
     import uvicorn
+    logger.info("🚀 AgriSurgeon API starting...")
     uvicorn.run(
-        "main:app",
+        app,
         host="0.0.0.0",
         port=8000,
         reload=True,
