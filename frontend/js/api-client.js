@@ -3,7 +3,7 @@
  * Handles all communication with the backend API
  */
 
-const API_BASE_URL = 'http://localhost:8000';
+const API_BASE_URL = 'https://akash918266-agrisurgeon-api.hf.space';
 
 class APIClient {
     constructor(baseURL = API_BASE_URL) {
