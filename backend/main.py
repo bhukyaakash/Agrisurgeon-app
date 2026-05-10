@@ -1,164 +1,369 @@
 """
-AgriSurgeon API - AI-Powered Plant Disease Detection
-Hybrid MobileNetV3-SVM-IoT Fusion Framework
-FINAL VERSION - With Environmental Impact on Confidence
+AgriSurgeon API - AI Powered Plant Disease Detection
+Hybrid MobileNetV3 + SVM + IoT Environmental Fusion
+
+FINAL VERSION WITH:
+✔ Temperature
+✔ Humidity
+✔ Soil Moisture
+✔ Environmental Disease Logic
+✔ Dynamic Confidence Adjustment
+✔ Risk Analysis
+✔ Stable Feature Extraction
+✔ Frontend Compatibility Fix
 """
 
-import os
+import io
 import json
-import pickle
 import logging
-import numpy as np
+from typing import List
 from datetime import datetime
 from pathlib import Path
 from contextlib import asynccontextmanager
 
-# TensorFlow & ML
-import tensorflow as tf
-from tensorflow import keras
+import joblib
+import numpy as np
 
-# FastAPI & Web
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from tensorflow.keras.models import load_model
+
+from fastapi import (
+    FastAPI,
+    UploadFile,
+    File,
+    Form,
+    HTTPException
+)
+
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
 from pydantic import BaseModel
 from PIL import Image
-import io
 
-# Configuration
-from config import Config
+# =========================================================
+# BASE DIRECTORY
+# =========================================================
 
-# ============================================
-# LOGGING SETUP
-# ============================================
+BASE_DIR = Path(__file__).resolve().parent
+
+# =========================================================
+# CONFIGURATION
+# =========================================================
+
+class Config:
+
+    API_TITLE = "AgriSurgeon API"
+
+    API_DESCRIPTION = (
+        "AI Powered Plant Disease Detection"
+    )
+
+    API_VERSION = "2.0.0"
+
+    LOG_LEVEL = logging.INFO
+
+    # =====================================================
+    # PATHS
+    # =====================================================
+
+    MODEL_DIR = BASE_DIR / "models"
+
+    MODEL_PATH = (
+        MODEL_DIR / "MobileNetV3_SOTA_Regularized.h5"
+    )
+
+    SVM_PATH = (
+        MODEL_DIR / "svm_hybrid_model.pkl"
+    )
+
+    SCALER_PATH = (
+        MODEL_DIR / "scaler.pkl"
+    )
+
+    CLASS_INDICES_PATH = (
+        MODEL_DIR / "class_indices.json"
+    )
+
+    DEPLOYMENT_CONFIG_PATH = (
+        BASE_DIR / "deployment_config.json"
+    )
+    HISTORY_FILE = BASE_DIR / "prediction_history.json"
+
+    # =====================================================
+    # IMAGE
+    # =====================================================
+
+    IMG_SIZE = 224
+
+    MAX_FILE_SIZE = 10 * 1024 * 1024
+
+    ALLOWED_FORMATS = {
+        "jpg",
+        "jpeg",
+        "png"
+    }
+
+    # =====================================================
+    # CORS
+    # =====================================================
+
+    CORS_ORIGINS = ["*"]
+
+    CORS_CREDENTIALS = True
+
+    CORS_METHODS = ["*"]
+
+    CORS_HEADERS = ["*"]
+
+    # =====================================================
+    # MODEL INFO
+    # =====================================================
+
+    MODEL_ACCURACY = 0.985
+
+    DISEASE_CATEGORIES = 38
+
+    PLANT_SPECIES = 14
+
+    TRAINING_SAMPLES = 54000
+
+
+# =========================================================
+# LOGGING
+# =========================================================
+
 logging.basicConfig(
     level=Config.LOG_LEVEL,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format=(
+        "%(asctime)s - "
+        "%(name)s - "
+        "%(levelname)s - "
+        "%(message)s"
+    )
 )
+
 logger = logging.getLogger(__name__)
 
-# ============================================
-# GLOBAL MODEL MANAGER
-# ============================================
+# =========================================================
+# MODEL MANAGER
+# =========================================================
+
 class ModelManager:
-    """Singleton for loading and managing ML models"""
+
     _instance = None
-    
+
     def __new__(cls):
+
         if cls._instance is None:
-            cls._instance = super(ModelManager, cls).__new__(cls)
+
+            cls._instance = super(
+                ModelManager,
+                cls
+            ).__new__(cls)
+
             cls._instance.is_loaded = False
+
         return cls._instance
-    
+
+    # =====================================================
+    # LOAD MODELS
+    # =====================================================
+
     def load_models(self):
-        """Load all real trained ML models and advisory database"""
+
         try:
-            logger.info("🔄 Loading real trained models...")
-            
-            # Load CNN model
-            logger.info(f"📥 Loading CNN from: {Config.MODEL_PATH}")
-            if not os.path.exists(Config.MODEL_PATH):
-                raise FileNotFoundError(f"Model not found: {Config.MODEL_PATH}")
-            
-            self.cnn_model = keras.models.load_model(Config.MODEL_PATH)
-            logger.info("✓ CNN model loaded successfully")
-            
-            # Create feature extractor (output from penultimate layer)
-            self.feature_extractor = keras.Model(
-                inputs=self.cnn_model.input,
-                outputs=self.cnn_model.layers[-2].output
+
+            logger.info(
+                "🔄 Loading trained models..."
             )
-            logger.info("✓ Feature extractor created")
-            
-            # Load scaler
-            logger.info(f"📥 Loading scaler from: {Config.SCALER_PATH}")
-            if not os.path.exists(Config.SCALER_PATH):
-                raise FileNotFoundError(f"Scaler not found: {Config.SCALER_PATH}")
-            
-            with open(Config.SCALER_PATH, 'rb') as f:
-                self.scaler = pickle.load(f)
-            logger.info("✓ StandardScaler loaded successfully")
-            
-            # Load SVM model
-            logger.info(f"📥 Loading SVM from: {Config.SVM_PATH}")
-            if not os.path.exists(Config.SVM_PATH):
-                raise FileNotFoundError(f"SVM model not found: {Config.SVM_PATH}")
-            
-            with open(Config.SVM_PATH, 'rb') as f:
-                self.svm_model = pickle.load(f)
-            logger.info("✓ SVM model loaded successfully")
-            
-            # Load class indices
-            logger.info(f"📥 Loading class indices from: {Config.CLASS_INDICES_PATH}")
-            if not os.path.exists(Config.CLASS_INDICES_PATH):
-                raise FileNotFoundError(f"Class indices not found: {Config.CLASS_INDICES_PATH}")
-            
-            with open(Config.CLASS_INDICES_PATH, 'r') as f:
+
+            required_files = [
+
+                Config.MODEL_PATH,
+
+                Config.SVM_PATH,
+
+                Config.SCALER_PATH,
+
+                Config.CLASS_INDICES_PATH
+            ]
+
+            for file_path in required_files:
+
+                logger.info(
+                    f"Checking: {file_path}"
+                )
+
+                if not file_path.exists():
+
+                    raise FileNotFoundError(
+                        f"Missing file: {file_path}"
+                    )
+
+            # =================================================
+            # LOAD CNN MODEL
+            # =================================================
+
+            logger.info(
+                "📥 Loading CNN model..."
+            )
+
+            self.cnn_model = load_model(
+                str(Config.MODEL_PATH)
+            )
+
+            logger.info(
+                "✓ CNN model loaded"
+            )
+
+            # =================================================
+            # FEATURE EXTRACTOR
+            # =================================================
+
+            logger.info(
+                "📥 Creating feature extractor..."
+            )
+
+            self.feature_extractor = (
+                self.cnn_model.layers[0]
+            )
+
+            logger.info(
+                f"✓ Feature extractor ready | "
+                f"Output Shape: "
+                f"{self.feature_extractor.output_shape}"
+            )
+
+            # =================================================
+            # LOAD SCALER
+            # =================================================
+
+            logger.info(
+                "📥 Loading scaler..."
+            )
+
+            self.scaler = joblib.load(
+                str(Config.SCALER_PATH)
+            )
+
+            logger.info(
+                "✓ Scaler loaded"
+            )
+
+            logger.info(
+                f"Scaler expects "
+                f"{self.scaler.n_features_in_} "
+                f"features"
+            )
+
+            # =================================================
+            # LOAD SVM
+            # =================================================
+
+            logger.info(
+                "📥 Loading SVM..."
+            )
+
+            self.svm_model = joblib.load(
+                str(Config.SVM_PATH)
+            )
+
+            logger.info(
+                "✓ SVM loaded"
+            )
+
+            # =================================================
+            # LOAD CLASS INDICES
+            # =================================================
+
+            logger.info(
+                "📥 Loading class indices..."
+            )
+
+            with open(
+                str(Config.CLASS_INDICES_PATH),
+                "r"
+            ) as f:
+
                 class_indices = json.load(f)
-            
-            # Create reverse mapping (index -> disease name)
-            self.disease_names = {v: k for k, v in class_indices.items()}
-            logger.info(f"✓ Class indices loaded ({len(self.disease_names)} classes)")
-            
-            # Load advisory database from deployment config
-            logger.info("📥 Loading advisory database from deployment_config.json...")
-            deployment_config_path = os.path.join(
-                os.path.dirname(__file__),
-                "deployment_config.json"
+
+            self.disease_names = {
+                v: k
+                for k, v in class_indices.items()
+            }
+
+            logger.info(
+                f"✓ Loaded "
+                f"{len(self.disease_names)} classes"
             )
-            
-            if os.path.exists(deployment_config_path):
-                with open(deployment_config_path, 'r') as f:
+
+            # =================================================
+            # ADVISORY DATABASE
+            # =================================================
+
+            if Config.DEPLOYMENT_CONFIG_PATH.exists():
+
+                with open(
+                    str(
+                        Config.DEPLOYMENT_CONFIG_PATH
+                    ),
+                    "r"
+                ) as f:
+
                     config_data = json.load(f)
-                    self.advisory_db = config_data.get('advisory', {})
-                    logger.info(f"✓ Advisory database loaded ({len(self.advisory_db)} entries)")
+
+                    self.advisory_db = (
+                        config_data.get(
+                            "advisory",
+                            {}
+                        )
+                    )
+
             else:
-                logger.warning(f"⚠️  Advisory database not found at {deployment_config_path}")
+
                 self.advisory_db = {}
-            
+
+            logger.info(
+                "✅ ALL MODELS LOADED SUCCESSFULLY"
+            )
+
             self.is_loaded = True
-            logger.info("✅ ALL REAL MODELS LOADED SUCCESSFULLY!")
-            logger.info(f"   • CNN: {Config.MODEL_PATH}")
-            logger.info(f"   • SVM: {Config.SVM_PATH}")
-            logger.info(f"   • Scaler: {Config.SCALER_PATH}")
-            logger.info(f"   • Advisory DB: {deployment_config_path}")
-            logger.info(f"   • Classes: {len(self.disease_names)}")
-            
-        except FileNotFoundError as e:
-            logger.error(f"❌ Model file not found: {e}")
-            logger.error("⚠️  Please ensure all model files exist in the models/ directory:")
-            logger.error(f"    • {Config.MODEL_PATH}")
-            logger.error(f"    • {Config.SVM_PATH}")
-            logger.error(f"    • {Config.SCALER_PATH}")
-            logger.error(f"    • {Config.CLASS_INDICES_PATH}")
-            raise
+
         except Exception as e:
-            logger.error(f"❌ Error loading models: {e}")
+
+            logger.error(
+                f"❌ Error loading models: {e}",
+                exc_info=True
+            )
+
             raise
 
-# ============================================
+
+# =========================================================
 # INITIALIZE MODEL MANAGER
-# ============================================
+# =========================================================
+
 model_manager = ModelManager()
 
-# ============================================
-# FASTAPI LIFESPAN CONTEXT
-# ============================================
+# =========================================================
+# FASTAPI LIFESPAN
+# =========================================================
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
-    try:
-        model_manager.load_models()
-        yield
-    except Exception as e:
-        logger.error(f"❌ Failed to load models during startup: {e}")
-        raise
-    # Shutdown
-    finally:
-        logger.info("⏹️  Shutting down AgriSurgeon API")
 
-# ============================================
-# FASTAPI APP INITIALIZATION
-# ============================================
+    model_manager.load_models()
+
+    yield
+
+    logger.info(
+        "⏹️ Shutting down API"
+    )
+
+# =========================================================
+# FASTAPI APP
+# =========================================================
+
 app = FastAPI(
     title=Config.API_TITLE,
     description=Config.API_DESCRIPTION,
@@ -166,7 +371,10 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Add CORS middleware
+# =========================================================
+# CORS
+# =========================================================
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=Config.CORS_ORIGINS,
@@ -175,362 +383,840 @@ app.add_middleware(
     allow_headers=Config.CORS_HEADERS,
 )
 
-# ============================================
-# REQUEST/RESPONSE MODELS
-# ============================================
+# =========================================================
+# RESPONSE MODEL
+# =========================================================
+
 class PredictionResponse(BaseModel):
+
+    class Config:
+        protected_namespaces = ()
+
     disease: str
+
     confidence: float
+
     temperature: float
+
     humidity: float
+
+    soil_moisture: float
+
     environmental_risk: str
+
+    environmental_factor: str
+
     advisory: dict
+
     timestamp: str
+
     model_version: str
 
-# ============================================
-# UTILITY FUNCTIONS
-# ============================================
-def validate_image(image_data: bytes) -> bool:
-    """Validate image file"""
+
+# =========================================================
+# IMAGE VALIDATION
+# =========================================================
+
+def validate_image(image_data: bytes):
+
     try:
-        if len(image_data) > Config.MAX_FILE_SIZE:
-            logger.warning(f"Image too large: {len(image_data)} bytes")
+
+        if (
+            len(image_data)
+            > Config.MAX_FILE_SIZE
+        ):
+
             return False
-        
-        img = Image.open(io.BytesIO(image_data))
+
+        img = Image.open(
+            io.BytesIO(image_data)
+        )
+
         img.verify()
-        img = Image.open(io.BytesIO(image_data))
-        
-        if img.format.lower() not in Config.ALLOWED_FORMATS:
-            logger.warning(f"Unsupported image format: {img.format}")
+
+        img = Image.open(
+            io.BytesIO(image_data)
+        )
+
+        if (
+            img.format.lower()
+            not in Config.ALLOWED_FORMATS
+        ):
+
             return False
-        
+
         return True
+
     except Exception as e:
-        logger.error(f"Image validation error: {e}")
+
+        logger.error(
+            f"Image validation error: {e}"
+        )
+
         return False
 
-def process_image(image_data: bytes) -> np.ndarray:
-    """Process image for model input"""
-    try:
-        img = Image.open(io.BytesIO(image_data)).convert('RGB')
-        img = img.resize((Config.IMG_SIZE, Config.IMG_SIZE))
-        
-        img_array = np.array(img) / 255.0
-        img_array = np.expand_dims(img_array, axis=0)
-        
-        return img_array.astype(np.float32)
-    except Exception as e:
-        logger.error(f"Image processing error: {e}")
-        raise
 
-def calculate_environmental_confidence_boost(disease_name: str, temperature: float, humidity: float) -> float:
-    """
-    Calculate confidence boost/penalty based on environmental conditions
-    Returns a multiplier (0.7 to 1.3) that affects the confidence score
-    
-    Different diseases have optimal environmental conditions
-    """
-    
-    # Disease-specific optimal environmental ranges
-    disease_conditions = {
-        "Tomato___Late_blight": {"opt_temp": (10, 25), "opt_humidity": (85, 100)},
-        "Potato___Late_blight": {"opt_temp": (10, 25), "opt_humidity": (85, 100)},
-        "Apple___Apple_scab": {"opt_temp": (5, 20), "opt_humidity": (80, 100)},
-        "Apple___Black_rot": {"opt_temp": (20, 27), "opt_humidity": (70, 100)},
-        "Grape___Black_rot": {"opt_temp": (18, 30), "opt_humidity": (70, 95)},
-        "Tomato___Early_blight": {"opt_temp": (20, 28), "opt_humidity": (60, 90)},
-        "Cherry_(including_sour)___Powdery_mildew": {"opt_temp": (15, 25), "opt_humidity": (30, 50)},
-        "Corn_(maize)___Common_rust_": {"opt_temp": (18, 27), "opt_humidity": (70, 100)},
+# =========================================================
+# PROCESS IMAGE
+# =========================================================
+
+def process_image(image_data: bytes):
+
+    img = Image.open(
+        io.BytesIO(image_data)
+    ).convert("RGB")
+
+    img = img.resize(
+        (
+            Config.IMG_SIZE,
+            Config.IMG_SIZE
+        )
+    )
+
+    img_array = np.array(img)
+
+    img_array = img_array / 255.0
+
+    img_array = np.expand_dims(
+        img_array,
+        axis=0
+    )
+
+    return img_array.astype(np.float32)
+
+
+# =========================================================
+# ENVIRONMENTAL ANALYSIS
+# =========================================================
+
+def calculate_environmental_factor(
+    disease_name,
+    temperature,
+    humidity,
+    soil_moisture
+):
+
+    score = 0
+
+    reasons = []
+
+    # =====================================================
+    # HUMIDITY
+    # =====================================================
+
+    if humidity > 80:
+
+        score += 1
+
+        reasons.append(
+            "High humidity supports fungal growth"
+        )
+
+    # =====================================================
+    # SOIL MOISTURE
+    # =====================================================
+
+    if soil_moisture > 75:
+
+        score += 1
+
+        reasons.append(
+            "Excess soil moisture increases infection risk"
+        )
+
+    # =====================================================
+    # TEMPERATURE
+    # =====================================================
+
+    if temperature > 32:
+
+        score += 1
+
+        reasons.append(
+            "High temperature stresses plants"
+        )
+
+    # =====================================================
+    # DISEASE SPECIFIC
+    # =====================================================
+
+    if "blight" in disease_name.lower():
+
+        if humidity > 75:
+
+            score += 1
+
+            reasons.append(
+                "Blight diseases spread rapidly in humidity"
+            )
+
+    if "mold" in disease_name.lower():
+
+        if humidity > 70:
+
+            score += 1
+
+            reasons.append(
+                "Mold growth favored by humid climate"
+            )
+
+    # =====================================================
+    # FINAL LEVEL
+    # =====================================================
+
+    if score >= 3:
+
+        level = "High Environmental Influence"
+
+        multiplier = 1.25
+
+    elif score == 2:
+
+        level = "Moderate Environmental Influence"
+
+        multiplier = 1.12
+
+    elif score == 1:
+
+        level = "Low Environmental Influence"
+
+        multiplier = 1.05
+
+    else:
+
+        level = "Minimal Environmental Influence"
+
+        multiplier = 0.95
+
+    return {
+
+        "level": level,
+
+        "multiplier": multiplier,
+
+        "reasons": reasons
     }
-    
-    conditions = disease_conditions.get(disease_name)
-    
-    if not conditions:
-        # Default moderate conditions boost
-        if (15 <= temperature <= 30) and (50 <= humidity <= 85):
-            return 1.1
-        else:
-            return 0.9
-    
-    opt_temp_min, opt_temp_max = conditions["opt_temp"]
-    opt_humidity_min, opt_humidity_max = conditions["opt_humidity"]
-    
-    # Check if conditions are in optimal range
-    temp_optimal = opt_temp_min <= temperature <= opt_temp_max
-    humidity_optimal = opt_humidity_min <= humidity <= opt_humidity_max
-    
-    if temp_optimal and humidity_optimal:
-        # Perfect conditions - boost confidence
-        return 1.25
-    elif temp_optimal or humidity_optimal:
-        # One condition is optimal
-        return 1.10
-    elif (opt_temp_min - 5 <= temperature <= opt_temp_max + 5) and (opt_humidity_min - 10 <= humidity <= opt_humidity_max + 10):
-        # Close to optimal
-        return 1.0
-    else:
-        # Far from optimal - reduce confidence
-        return 0.75
 
-def calculate_risk_level(disease_name: str, temperature: float, humidity: float) -> str:
-    """Calculate disease risk level based on disease and environmental conditions"""
-    
+
+# =========================================================
+# RISK LEVEL
+# =========================================================
+
+def calculate_risk_level(
+    disease_name,
+    temperature,
+    humidity,
+    soil_moisture
+):
+
     if "healthy" in disease_name.lower():
-        return "none"
-    
-    critical_diseases = [
-        "Tomato___Late_blight",
-        "Potato___Late_blight",
-        "Grape___Black_rot",
-        "Grape___Esca_(Black_Measles)",
-        "Orange___Haunglongbing_(Citrus_greening)",
-        "Tomato___Tomato_Yellow_Leaf_Curl_Virus"
-    ]
-    
-    if disease_name in critical_diseases:
-        return "critical"
-    
-    if (20 <= temperature <= 28) and (60 <= humidity <= 85):
-        return "high"
-    elif (15 <= temperature <= 30) and (50 <= humidity <= 95):
-        return "medium"
-    else:
-        return "low"
 
-# ============================================
-# ROOT ENDPOINTS
-# ============================================
+        return "none"
+
+    risk_score = 0
+
+    if humidity > 75:
+        risk_score += 1
+
+    if soil_moisture > 70:
+        risk_score += 1
+
+    if temperature > 32:
+        risk_score += 1
+
+    if risk_score >= 3:
+
+        return "high"
+
+    elif risk_score == 2:
+
+        return "medium"
+
+    return "low"
+# =========================================================
+# HISTORY FUNCTIONS
+# =========================================================
+
+def load_prediction_history():
+
+    try:
+
+        if not Config.HISTORY_FILE.exists():
+
+            return []
+
+        with open(
+            Config.HISTORY_FILE,
+            "r"
+        ) as f:
+
+            return json.load(f)
+
+    except Exception as e:
+
+        logger.error(
+            f"History load error: {e}"
+        )
+
+        return []
+
+
+def save_prediction_history(entry):
+
+    try:
+
+        history = load_prediction_history()
+
+        history.insert(0, entry)
+
+        # KEEP LAST 100 RECORDS
+        history = history[:100]
+
+        with open(
+            Config.HISTORY_FILE,
+            "w"
+        ) as f:
+
+            json.dump(
+                history,
+                f,
+                indent=4
+            )
+
+    except Exception as e:
+
+        logger.error(
+            f"History save error: {e}"
+        )
+
+# =========================================================
+# ROOT
+# =========================================================
+
 @app.get("/")
 async def root():
-    """Root endpoint - API info"""
-    return {
-        "name": Config.API_TITLE,
-        "version": Config.API_VERSION,
-        "status": "✅ Running",
-        "models_loaded": model_manager.is_loaded,
-        "description": Config.API_DESCRIPTION
+    history_entry = {
+
+        "disease": disease_name,
+
+        "confidence": round(
+            final_confidence,
+            4
+        ),
+
+        "temperature": temperature,
+
+        "humidity": humidity,
+
+        "soil_moisture": soil_moisture,
+
+        "environmental_risk": risk_level,
+
+        "environmental_factor": (
+            env_analysis["level"]
+        ),
+
+        "timestamp": (
+            datetime.utcnow().isoformat()
+        )
     }
+
+    save_prediction_history(
+        history_entry
+    )
+
+    return {
+
+        "name": Config.API_TITLE,
+
+        "version": Config.API_VERSION,
+
+        "status": "running",
+
+        "models_loaded": model_manager.is_loaded
+        
+        # =================================================
+        # SAVE HISTORY
+        # =================================================
+
+       
+    }
+
+
+# =========================================================
+# HEALTH
+# =========================================================
 
 @app.get("/api/health")
 async def health_check():
-    """Health check endpoint"""
+
     return {
+
         "status": "healthy",
-        "timestamp": datetime.utcnow().isoformat(),
-        "models_loaded": model_manager.is_loaded,
-        "model_accuracy": Config.MODEL_ACCURACY,
-        "disease_categories": Config.DISEASE_CATEGORIES
+
+        "models_loaded": (
+            model_manager.is_loaded
+        ),
+
+        "timestamp": (
+            datetime.utcnow().isoformat()
+        )
     }
 
-# ============================================
-# PREDICTION ENDPOINT
-# ============================================
-@app.post("/api/predict", response_model=PredictionResponse)
+
+# =========================================================
+# PREDICT
+# =========================================================
+
+@app.post(
+    "/api/predict",
+    response_model=PredictionResponse
+)
 async def predict(
+
     file: UploadFile = File(...),
+
     temperature: float = Form(...),
-    humidity: float = Form(...)
+
+    humidity: float = Form(...),
+
+    # SUPPORT BOTH FIELD NAMES
+    soil_moisture: float = Form(None),
+
+    soilMoisture: float = Form(None)
+
 ):
-    """
-    Predict plant disease from image and environmental data
-    
-    FEATURES:
-    ✓ Loads models from: backend/models/
-    ✓ Advisory from: backend/deployment_config.json
-    ✓ Confidence varies with environmental conditions
-    ✓ Different predictions for different images
-    
-    Args:
-        file: Leaf image (JPEG/PNG)
-        temperature: Temperature in Celsius (10-50)
-        humidity: Humidity percentage (0-100)
-    
-    Returns:
-        Disease prediction with confidence and advisory
-    """
+
     try:
-        # Validate models loaded
+
+        # =================================================
+        # MODEL CHECK
+        # =================================================
+
         if not model_manager.is_loaded:
+
             raise HTTPException(
                 status_code=503,
-                detail="❌ Models not loaded. Service unavailable."
+                detail="Models not loaded"
             )
-        
-        # Read and validate image
+
+        # =================================================
+        # SUPPORT BOTH FRONTEND FIELD NAMES
+        # =================================================
+
+        if soil_moisture is None:
+
+            soil_moisture = soilMoisture
+
+        # =================================================
+        # DEFAULT VALUE
+        # =================================================
+
+        if soil_moisture is None:
+
+            soil_moisture = 50.0
+
+        # =================================================
+        # READ IMAGE
+        # =================================================
+
         image_data = await file.read()
+
         if not validate_image(image_data):
+
             raise HTTPException(
                 status_code=400,
-                detail="Invalid image file or file too large (max 10MB)"
+                detail="Invalid image"
             )
-        
-        # Process image
-        image_array = process_image(image_data)
-        
-        # Extract visual features from CNN
-        visual_features = model_manager.feature_extractor.predict(
-            image_array, 
-            verbose=0
-        )[0]
-        
-        # Validate environmental data
-        if not (10 <= temperature <= 50):
-            raise HTTPException(
-                status_code=400,
-                detail="Temperature must be between 10-50°C"
-            )
-        if not (0 <= humidity <= 100):
-            raise HTTPException(
-                status_code=400,
-                detail="Humidity must be between 0-100%"
-            )
-        
-        # Normalize environmental data with scaler
-        env_data = np.array([[temperature, humidity]])
-        env_normalized = model_manager.scaler.transform(env_data)[0]
-        
-        # Create hybrid features (CNN features + Environmental features)
-        hybrid_features = np.concatenate([visual_features, env_normalized])
-        hybrid_features = hybrid_features.reshape(1, -1)
-        
-        # Predict disease using SVM
-        disease_idx = model_manager.svm_model.predict(hybrid_features)[0]
-        disease_name = model_manager.disease_names.get(disease_idx, "Unknown Disease")
-        
-        # Calculate base confidence from SVM decision function
-        decision_scores = model_manager.svm_model.decision_function(hybrid_features)[0]
-        base_confidence = float((np.max(decision_scores) + 1) / 2)
-        base_confidence = min(max(base_confidence, 0.0), 1.0)
-        
-        # Apply environmental boost/penalty to confidence
-        environmental_boost = calculate_environmental_confidence_boost(disease_name, temperature, humidity)
-        final_confidence = base_confidence * environmental_boost
-        final_confidence = min(max(final_confidence, 0.0), 1.0)
-        
-        # Get advisory from deployment_config.json
-        advisory = model_manager.advisory_db.get(
-            disease_name,
-            model_manager.advisory_db.get("generic", {
-                "cause": "Unknown disease.",
-                "cure": "Consult agricultural expert.",
-                "prevention": "Follow crop hygiene.",
-                "pathogen_type": "Unknown",
-                "severity": "Unknown"
-            })
-        )
-        
-        # Calculate risk level based on environmental conditions
-        risk_level = calculate_risk_level(disease_name, temperature, humidity)
-        
-        logger.info(f"✓ Prediction: {disease_name}")
-        logger.info(f"  └─ Base Confidence: {base_confidence:.2%}")
-        logger.info(f"  └─ Environmental Factor: {environmental_boost:.2f}x")
-        logger.info(f"  └─ Final Confidence: {final_confidence:.2%}")
-        logger.info(f"  └─ Risk Level: {risk_level}")
-        logger.info(f"  └─ Temp: {temperature}°C, Humidity: {humidity}%")
-        
-        return {
-            "disease": disease_name,
-            "confidence": round(final_confidence, 4),
-            "temperature": float(temperature),
-            "humidity": float(humidity),
-            "environmental_risk": risk_level,
-            "advisory": advisory,
-            "timestamp": datetime.utcnow().isoformat(),
-            "model_version": Config.API_VERSION
-        }
-    
-    except HTTPException as e:
-        logger.error(f"HTTP Error: {e.detail}")
-        raise
-    except Exception as e:
-        logger.error(f"❌ Prediction error: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Prediction failed: {str(e)}"
+
+        image_array = process_image(
+            image_data
         )
 
-# ============================================
-# INFORMATION ENDPOINTS
-# ============================================
+        # =================================================
+        # FEATURE EXTRACTION
+        # =================================================
+
+        visual_features = (
+            model_manager.feature_extractor.predict(
+                image_array,
+                verbose=0
+            )[0]
+        )
+
+        logger.info(
+            f"Visual Features Shape: "
+            f"{visual_features.shape}"
+        )
+
+        # =================================================
+        # ENVIRONMENTAL FEATURES
+        # =================================================
+
+        env_features = np.array([
+
+            temperature,
+
+            humidity
+
+        ])
+
+        # =================================================
+        # HYBRID FEATURES
+        # =================================================
+
+        hybrid_features = np.concatenate([
+
+            visual_features,
+
+            env_features
+
+        ])
+
+        hybrid_features = (
+            hybrid_features.reshape(1, -1)
+        )
+
+        logger.info(
+            f"Hybrid Features Shape: "
+            f"{hybrid_features.shape}"
+        )
+
+        # =================================================
+        # FEATURE CHECK
+        # =================================================
+
+        expected_features = (
+            model_manager.scaler.n_features_in_
+        )
+
+        current_features = (
+            hybrid_features.shape[1]
+        )
+
+        if current_features != expected_features:
+
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    f"Feature mismatch | "
+                    f"Expected "
+                    f"{expected_features} "
+                    f"but got "
+                    f"{current_features}"
+                )
+            )
+
+        # =================================================
+        # SCALE
+        # =================================================
+
+        hybrid_features = (
+            model_manager.scaler.transform(
+                hybrid_features
+            )
+        )
+
+        # =================================================
+        # SVM PREDICTION
+        # =================================================
+
+        disease_idx = (
+            model_manager.svm_model.predict(
+                hybrid_features
+            )[0]
+        )
+
+        disease_name = (
+            model_manager.disease_names.get(
+                disease_idx,
+                "Unknown Disease"
+            )
+        )
+
+        # =================================================
+        # CONFIDENCE
+        # =================================================
+
+        decision_scores = (
+            model_manager.svm_model.decision_function(
+                hybrid_features
+            )[0]
+        )
+
+        base_confidence = float(
+            (np.max(decision_scores) + 1) / 2
+        )
+
+        base_confidence = min(
+            max(base_confidence, 0.0),
+            1.0
+        )
+
+        # =================================================
+        # ENVIRONMENTAL ANALYSIS
+        # =================================================
+
+        env_analysis = (
+            calculate_environmental_factor(
+                disease_name,
+                temperature,
+                humidity,
+                soil_moisture
+            )
+        )
+
+        final_confidence = (
+            base_confidence
+            * env_analysis["multiplier"]
+        )
+
+        final_confidence = min(
+            final_confidence,
+            1.0
+        )
+
+        # =================================================
+        # RISK
+        # =================================================
+
+        risk_level = calculate_risk_level(
+            disease_name,
+            temperature,
+            humidity,
+            soil_moisture
+        )
+
+        # =================================================
+        # ADVISORY
+        # =================================================
+
+        advisory = (
+            model_manager.advisory_db.get(
+                disease_name,
+                {
+                    "cause": (
+                        "Environmental conditions "
+                        "may contribute to disease spread"
+                    ),
+
+                    "cure": (
+                        "Consult agricultural expert"
+                    ),
+
+                    "prevention": (
+                        "Maintain balanced moisture "
+                        "and humidity"
+                    ),
+
+                    "severity": "Unknown"
+                }
+            )
+        )
+
+        # =================================================
+        # LOGGING
+        # =================================================
+
+        logger.info(
+            f"Prediction: {disease_name}"
+        )
+
+        logger.info(
+            f"Base Confidence: "
+            f"{base_confidence:.2%}"
+        )
+
+        logger.info(
+            f"Final Confidence: "
+            f"{final_confidence:.2%}"
+        )
+
+        logger.info(
+            f"Environmental Influence: "
+            f"{env_analysis['level']}"
+        )
+
+        # =================================================
+        # RESPONSE
+        # =================================================
+
+        return {
+
+            "disease": disease_name,
+
+            "confidence": round(
+                final_confidence,
+                4
+            ),
+
+            "temperature": temperature,
+
+            "humidity": humidity,
+
+            "soil_moisture": soil_moisture,
+
+            "environmental_risk": risk_level,
+
+            "environmental_factor": (
+                env_analysis["level"]
+            ),
+
+            "advisory": advisory,
+
+            "timestamp": (
+                datetime.utcnow().isoformat()
+            ),
+
+            "model_version": (
+                Config.API_VERSION
+            )
+        }
+
+    except HTTPException as e:
+
+        raise e
+
+    except Exception as e:
+
+        logger.error(
+            f"Prediction error: {e}",
+            exc_info=True
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
+
+
+# =========================================================
+# DISEASES
+# =========================================================
+
 @app.get("/api/diseases")
 async def get_diseases():
-    """Get list of all diseases"""
-    if not model_manager.is_loaded:
-        raise HTTPException(status_code=503, detail="Models not loaded")
-    
-    diseases = list(model_manager.disease_names.values())
+
     return {
-        "count": len(diseases),
-        "diseases": sorted(diseases)
+
+        "count": len(
+            model_manager.disease_names
+        ),
+
+        "diseases": sorted(
+            list(
+                model_manager.disease_names.values()
+            )
+        )
     }
+
+
+# =========================================================
+# MODEL INFO
+# =========================================================
 
 @app.get("/api/models")
 async def get_models():
-    """Get model information"""
+
     return {
-        "cnn": {
-            "name": "MobileNetV3",
-            "architecture": "MobileNetV3-Small",
-            "parameters": "5.4M",
-            "input_size": (224, 224, 3),
-            "purpose": "Visual feature extraction"
-        },
-        "svm": {
-            "name": "Linear/RBF SVM",
-            "kernel": "Auto-detected from trained model",
-            "classes": Config.DISEASE_CATEGORIES,
-            "input_features": Config.HYBRID_FEATURES_DIM
-        },
-        "performance": {
-            "accuracy": Config.MODEL_ACCURACY,
-            "precision": Config.MODEL_PRECISION,
-            "recall": Config.MODEL_RECALL,
-            "f1_score": Config.MODEL_F1_SCORE
-        },
-        "training": {
-            "samples": Config.TRAINING_SAMPLES,
-            "plant_species": Config.PLANT_SPECIES,
-            "disease_categories": Config.DISEASE_CATEGORIES
+
+        "cnn": "MobileNetV3",
+
+        "svm": "Hybrid SVM",
+
+        "accuracy": Config.MODEL_ACCURACY,
+
+        "classes": (
+            Config.DISEASE_CATEGORIES
+        )
+    }
+    # =========================================================
+# PREDICTION HISTORY
+# =========================================================
+
+@app.get("/api/history")
+async def get_history():
+
+    history = load_prediction_history()
+
+    return {
+
+        "count": len(history),
+
+        "history": history
+    }
+
+
+# =========================================================
+# CLEAR HISTORY
+# =========================================================
+
+@app.delete("/api/history")
+async def clear_history():
+
+    try:
+
+        with open(
+            Config.HISTORY_FILE,
+            "w"
+        ) as f:
+
+            json.dump([], f)
+
+        return {
+
+            "message": "History cleared"
         }
-    }
 
-@app.get("/api/statistics")
-async def get_statistics():
-    """Get API statistics"""
-    return {
-        "api_version": Config.API_VERSION,
-        "model_accuracy": f"{Config.MODEL_ACCURACY * 100:.2f}%",
-        "supported_diseases": Config.DISEASE_CATEGORIES,
-        "plant_species": Config.PLANT_SPECIES,
-        "training_samples": Config.TRAINING_SAMPLES,
-        "inference_timeout": f"{Config.INFERENCE_TIMEOUT}s",
-        "max_image_size": f"{Config.MAX_FILE_SIZE / (1024*1024):.0f}MB",
-        "supported_formats": list(Config.ALLOWED_FORMATS),
-        "timestamp": datetime.utcnow().isoformat()
-    }
+    except Exception as e:
 
-# ============================================
-# ERROR HANDLERS
-# ============================================
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
+
+
+# =========================================================
+# ERROR HANDLER
+# =========================================================
+
 @app.exception_handler(HTTPException)
-async def http_exception_handler(request, exc):
-    return {
-        "error": exc.detail,
-        "status_code": exc.status_code,
-        "timestamp": datetime.utcnow().isoformat()
-    }
+async def http_exception_handler(
+    request,
+    exc
+):
 
-# ============================================
-# STARTUP
-# ============================================
+    return JSONResponse(
+
+        status_code=exc.status_code,
+
+        content={
+
+            "error": exc.detail,
+
+            "status_code": exc.status_code,
+
+            "timestamp": (
+                datetime.utcnow().isoformat()
+            )
+        }
+    )
+
+
+# =========================================================
+# MAIN
+# =========================================================
+
 if __name__ == "__main__":
+
     import uvicorn
-    logger.info("🚀 AgriSurgeon API starting...")
+
+    logger.info(
+        "🚀 Starting AgriSurgeon API"
+    )
+
     uvicorn.run(
-        app,
+        "main:app",
         host="0.0.0.0",
         port=8000,
         reload=True,
