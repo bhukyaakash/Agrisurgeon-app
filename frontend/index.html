@@ -23,6 +23,7 @@
                 </div>
                 <div class="nav-links">
                     <button class="nav-btn active" data-section="upload">Diagnose</button>
+                    <button class="nav-btn" data-section="history">History</button>
                     <button class="nav-btn" data-section="about">About</button>
                     <button class="theme-toggle" id="themeToggle" title="Toggle dark mode">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
@@ -130,6 +131,29 @@
                                     <span>100%</span>
                                 </div>
                             </div>
+
+                            <div class="control-group">
+                                <label for="soilMoisture" class="control-label">
+                                    <span class="label-text">Soil Moisture</span>
+                                    <span class="label-value" id="soilValue">50</span>%
+                                </label>
+
+                                <input 
+                                    type="range" 
+                                    id="soilMoisture" 
+                                    class="slider" 
+                                    min="0" 
+                                    max="100" 
+                                    value="50" 
+                                    step="1"
+                                    aria-label="Soil moisture slider"
+                                >
+
+                                <div class="slider-labels">
+                                    <span>0%</span>
+                                    <span>100%</span>
+                                </div>
+                            </div>
                         </div>
                     </div>
 
@@ -173,6 +197,7 @@
                                 <p class="result-label">Environmental Context</p>
                                 <p class="condition-text" id="conditionInfo">-</p>
                                 <p class="risk-level" id="riskLevel">Risk Level: -</p>
+                                <p class="env-factor" id="envFactor">Environmental Influence: -</p>
                             </div>
                         </div>
                     </div>
@@ -215,6 +240,30 @@
                         <button id="downloadBtn" class="btn btn-outline" type="button">
                             <span class="btn-text">Download Report</span>
                         </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- History Section -->
+        <section class="section history-section" id="history" style="display: none;">
+            <div class="section-container">
+                <div class="glass-card history-card">
+                    <div class="card-header">
+                        <h3 class="card-title">📊 Prediction History</h3>
+                        <p class="card-subtitle">View all your previous plant disease diagnoses</p>
+                    </div>
+
+                    <!-- History Controls -->
+                    <div class="history-controls">
+                        <button id="clearHistoryBtn" class="btn btn-outline btn-sm" type="button">
+                            <span class="btn-text">Clear History</span>
+                        </button>
+                    </div>
+
+                    <!-- History Container -->
+                    <div id="historyContainer" class="history-container">
+                        <p class="empty-state">Loading history...</p>
                     </div>
                 </div>
             </div>
@@ -301,8 +350,8 @@
     <!-- Footer -->
     <footer class="footer">
         <div class="footer-content">
-            <p class="footer-text">&copy; 2024 AgriSurgeon - Maulana Azad National Institute of Technology, Bhopal</p>
-            <p class="footer-version">Version 1.0.0 | Production Ready</p>
+            <p class="footer-text">&copy; 2026 AgriSurgeon - Bhukya Akash ,MTech- Automation and Robotics</p>
+            <p class="footer-version">Contact: 9182664585</p>
         </div>
     </footer>
 
