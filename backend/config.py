@@ -10,7 +10,7 @@ class Config:
     
     # API Configuration
     API_TITLE = "AgriSurgeon API"
-    API_VERSION = "1.0.0"
+    API_VERSION = "2.0.0"
     API_DESCRIPTION = "Hybrid MobileNetV3-SVM-IoT Fusion Framework for Intelligent Plant Disease Detection"
     
     # Base paths
@@ -23,6 +23,7 @@ class Config:
     SCALER_PATH = os.getenv("SCALER_PATH", os.path.join(MODELS_DIR, "scaler.pkl"))
     SVM_PATH = os.getenv("SVM_PATH", os.path.join(MODELS_DIR, "svm_hybrid_model.pkl"))
     CLASS_INDICES_PATH = os.getenv("CLASS_INDICES_PATH", os.path.join(MODELS_DIR, "class_indices.json"))
+    DEPLOYMENT_CONFIG_PATH = BASE_DIR / "deployment_config.json"
     
     # Image processing
     IMG_SIZE = 224
@@ -40,6 +41,8 @@ class Config:
     TEMP_MAX = 50
     HUMIDITY_MIN = 0
     HUMIDITY_MAX = 100
+    SOIL_MOISTURE_MIN = 0
+    SOIL_MOISTURE_MAX = 100
     
     # Disease categories
     DISEASE_CATEGORIES = 38
@@ -73,32 +76,13 @@ class Config:
     ALGORITHM = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES = 30
     
-    # Disease information
-    CRITICAL_DISEASES = [
-        "Tomato Late Blight",
-        "Potato Late Blight",
-        "Citrus Greening"
-    ]
-    
     @classmethod
-    def get_disease_severity(cls, disease_name: str) -> str:
-        """Get disease severity level"""
-        severity_map = {
-            "Tomato Late Blight": "Critical",
-            "Potato Late Blight": "Critical",
-            "Citrus Greening": "Critical",
-            "Apple Scab": "High",
-            "Tomato Early Blight": "High",
-            "Grape Black Rot": "High",
-        }
-        return severity_map.get(disease_name, "Medium")
-    
-    @classmethod
-    def validate_environment_data(cls, temperature: float, humidity: float) -> bool:
+    def validate_environment_data(cls, temperature: float, humidity: float, soil_moisture: float) -> bool:
         """Validate environmental data"""
         return (
             cls.TEMP_MIN <= temperature <= cls.TEMP_MAX and
-            cls.HUMIDITY_MIN <= humidity <= cls.HUMIDITY_MAX
+            cls.HUMIDITY_MIN <= humidity <= cls.HUMIDITY_MAX and
+            cls.SOIL_MOISTURE_MIN <= soil_moisture <= cls.SOIL_MOISTURE_MAX
         )
 
 class DevelopmentConfig(Config):
